@@ -18,10 +18,10 @@ REGISTRY="${REGISTRY:-https://registry.npmjs.org}"
 OFFICIAL="https://registry.npmjs.org"
 ROOT_PKG="@opencode/cli"
 
-# system → 平台包的包名后缀 / tarball 名后缀
+# system → 平台包名后缀（npm 上的包是 cli-linux-x64 / cli-linux-arm64）
 PLATFORMS=(
-  "x86_64-linux:x64"
-  "aarch64-linux:arm64"
+  "x86_64-linux:linux-x64"
+  "aarch64-linux:linux-arm64"
 )
 
 check_only=false
