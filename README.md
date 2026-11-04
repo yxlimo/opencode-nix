@@ -35,7 +35,12 @@ opencode 两三天发一版，版本跟 nixpkgs 的节奏对不上；而自己�
 inputs.opencode-nix.url = "git+https://github.com/yxlimo/opencode-nix?ref=main";
 
 # 锁死某个 opencode 版本（不会随上游推进）
-inputs.opencode-nix.url = "git+https://github.com/yxlimo/opencode-nix?ref=v2.2.5";
+# ⚠️ 必须写全 ref：`?ref=v2.2.5` 会被当成**分支名**（refs/heads/v2.2.5）去找，报
+#    "couldn't find remote ref refs/heads/v2.2.5"。tag 要写 refs/tags/。
+inputs.opencode-nix.url = "git+https://github.com/yxlimo/opencode-nix?ref=refs/tags/v2.2.5";
+
+# 或者用 github: 简写（它会先试分支、再试 tag，所以直接写版本号即可）
+inputs.opencode-nix.url = "github:yxlimo/opencode-nix/v2.2.5";
 ```
 
 然后二选一：
