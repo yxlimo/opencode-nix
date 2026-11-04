@@ -1,0 +1,85 @@
+name: update & build
+
+# 触发方式（**没有 cron**）：
+#   · repository_dispatch: upstream-release  —— 上游发了新 release 时由外部中继触发
+#     （GitHub 不会把别人仓的 release 事件发给我们，中继负责探测后 dispatch）
+#   · workflow_dispatch                      —— 手动补跑
+#   · push / pull_request                    —— 改代码时验证能构建
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [ upstream-release ]
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    # 只有 dispatch/手动触发才做「更新 sources.json 并提交」；
+    # push / PR 只验证当前内容能构建。
+    if: github.event_name == 'repository_dispatch' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: 更新 sources.json（默认官方 npm）
+        run: ./bin/update-sources.sh
+
+      - name: 是否有变化
+        id: diff
+        run: |
+          if git diff --quiet -- sources.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            jq -r '.version' sources.json | sed 's/^/version=/'
+          fi
+
+      - name: 构建验证（x86_64）
+        if: steps.diff.outputs.changed == 'true'
+        run: nix build --no-link -L .#opencode
+
+      - name: 提交
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sources.json
+          git commit -m "chore: bump opencode to $(jq -r '.version' sources.json)"
+          git push
+
+  build:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          # x86_64：真构建（runner 本身就是 x86_64）
+          - system: x86_64-linux
+            build: true
+          # aarch64：只求值。runner 跑不了 arm 二进制（需 binfmt 模拟），
+          # 强行 build 只会得到「exec format error」这种假阴性。
+          - system: aarch64-linux
+            build: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: 求值
+        run: nix eval --raw .#packages.${{ matrix.system }}.opencode.version
+
+      - name: 构建
+        if: matrix.build
+        run: nix build --no-link -L .#packages.${{ matrix.system }}.opencode

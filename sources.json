@@ -1,0 +1,17 @@
+{
+  "version": "2.2.5",
+  "platforms": {
+    "x86_64-linux": {
+      "package": "@opencode/cli-linux-x64",
+      "tarball": "cli-linux-x64",
+      "version": "2.2.5",
+      "hash": "sha256-kmkO7gemgNPLdgygK6Q4eN6eqxtOXV366HlVGMU2KPQ="
+    },
+    "aarch64-linux": {
+      "package": "@opencode/cli-linux-arm64",
+      "tarball": "cli-linux-arm64",
+      "version": "2.2.5",
+      "hash": "sha256-+MWoIHX+3ptbBE7WyKbROtgHp+YsrqHNCoeK3vSesFM="
+    }
+  }
+}
