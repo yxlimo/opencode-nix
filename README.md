@@ -27,6 +27,17 @@ opencode 两三天发一版，版本跟 nixpkgs 的节奏对不上；而自己�
 }
 ```
 
+**锁版本**：每次 `sources.json` 变化都会打一个 `v<version>` 的 tag 并发 release，
+所以可以按可读版本号锁，而不是只能锁 commit rev：
+
+```nix
+# 跟上游最新（推荐，flake.lock 自己会钉住具体 rev）
+inputs.opencode-nix.url = "git+https://github.com/yxlimo/opencode-nix?ref=main";
+
+# 锁死某个 opencode 版本（不会随上游推进）
+inputs.opencode-nix.url = "git+https://github.com/yxlimo/opencode-nix?ref=v2.2.5";
+```
+
 然后二选一：
 
 ```nix
@@ -67,6 +78,8 @@ opencode = (opencode-nix.packages.${system}.opencode).override {
 
 - `repository_dispatch`（type=`upstream-release`）：由外部中继在上游发版后触发；
 - `workflow_dispatch`：手动补跑（`gh workflow run update.yml`）。
+
+更新成功后 CI 会：提交 `sources.json` → 打 `v<version>` tag → 发 GitHub release（附每平台哈希）。
 
 GitHub 不会把「别人仓库发 release」的事件投递给本仓，所以需要一个探测中继
 （定时查上游 release 列表 → 发现新版本就 dispatch）。中继不在本仓，

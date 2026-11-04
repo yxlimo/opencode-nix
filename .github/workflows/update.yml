@@ -56,6 +56,28 @@ jobs:
           git commit -m "chore: bump opencode to $(jq -r '.version' sources.json)"
           git push
 
+      # 打 tag + 发 release：consumer 才能锁到「2.2.5」这种可读版本，
+      # 而不是只能锁 commit rev。flake 用法：
+      #   git+https://github.com/yxlimo/opencode-nix?ref=v2.2.5
+      - name: 打 tag + 发 release
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(jq -r '.version' sources.json)
+          tag="v${version}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag 已存在，跳过"
+            exit 0
+          fi
+          notes=$(printf 'opencode %s，来自 npm 的预编译二进制（x86_64-linux / aarch64-linux）。\n\n哈希（sources.json）：\n\n```\n%s\n```\n' \
+            "$version" \
+            "$(jq -r '.platforms | to_entries[] | "\(.key): \(.value.version) \(.value.hash)"' sources.json)")
+          gh release create "$tag" \
+            --title "opencode $version" \
+            --notes "$notes" \
+            --target "$(git rev-parse HEAD)"
+
   build:
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
