@@ -1,16 +1,17 @@
 {
-  description = "opencode CLI packaged from its npm prebuilt binaries (per-platform), self-contained and registry-agnostic";
+  description = "opencode packaged for Nix from its published npm prebuilt binaries (Linux)";
 
-  # 用 git+https:// 而不是 github: 简写：
-  #   `github:` 靠 GitHub REST API 解析 ref，未认证时每 IP 每小时只有 60 次，
-  #   一次 flake metadata 就可能撞 403。git+https: 走 git 协议，不受该限流约束。
+  # Use git+https:// rather than the `github:` shorthand: the shorthand
+  # resolves refs through the GitHub REST API, which is rate limited to 60
+  # requests per hour per unauthenticated IP — a single `nix flake metadata` can
+  # hit 403. git+https speaks the git protocol and is not subject to that limit.
   inputs.nixpkgs.url = "git+https://github.com/NixOS/nixpkgs?ref=nixos-unstable";
 
   outputs =
     { self, nixpkgs }:
     let
-      # 本仓只做 Linux：opencode 的 npm 平台包在 linux-x64 / linux-arm64 上都有，
-      # 而我们自己的四台机器（WSL / Mac T2 / NAS / Oracle）全是 Linux。
+      # Linux only: the npm platform packages exist for linux-x64 and
+      # linux-arm64, and that is what consumers here run.
       systems = [
         "x86_64-linux"
         "aarch64-linux"
@@ -23,16 +24,17 @@
         default = self.packages.${system}.opencode;
       });
 
-      # consumer 侧最简单的用法：
-      #   overlay = final: prev: { opencode = prev.callPackage "${thisFlake}/package.nix" { }; };
-      # 或直接用 packages.<system>.opencode，再用 .override { registry = ...; } 换源。
+      # For consumers that prefer `pkgs.opencode` over a flake attribute. The
+      # registry stays overridable: `pkgs.opencode.override { registry = …; }`
+      # works because the package is a callPackage function.
       overlays.default = final: prev: {
         opencode = final.callPackage ./package.nix { };
       };
 
-      # 不做 checks：`checks` 会被 `nix flake check` 在所有系统上构建，
-      # 而 aarch64 的二进制在 x86_64 机器上根本执行不了（需要 binfmt 模拟）。
-      # 两个平台的可用性交给 CI：x86_64 真构建、aarch64 求值验证。
+      # No `checks`: `nix flake check` would build them on every system, and an
+      # aarch64 binary cannot execute on an x86_64 host without binfmt
+      # emulation. CI covers both instead — a real build on x86_64, evaluation
+      # on aarch64.
 
       formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.nixfmt-rfc-style);
     };

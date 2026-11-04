@@ -1,105 +1,138 @@
 # opencode-nix
 
-把 [opencode](https://github.com/anomalyco/opencode) 的 **npm 预编译二进制**包成 Nix 包。
-只做 Linux（`x86_64-linux` / `aarch64-linux`）。
+`opencode` packaged for Nix from its published npm prebuilt binaries. No
+TypeScript build, no source checkout — the tarball is whatever upstream
+published, already compiled.
 
-## 为什么有这个仓
+Linux only: `x86_64-linux`, `aarch64-linux`.
 
-opencode 两三天发一版，版本跟 nixpkgs 的节奏对不上；而自己在下游仓里维护
-`version` + `sha256` 又会踩两个坑：
+## Usage
 
-1. 包管理工具（`nix-update` 等）通常只重算**当前这台机器的平台**的哈希，
-   另一个平台的哈希会悄悄过期，直到有人在那台机器上构建才发现；
-2. npm 的 registry 可能被换成镜像，而多数自动更新工具把 registry 写死成官方域名。
-
-所以版本与每平台哈希集中放在 `sources.json`，由一个脚本一次性更新全部平台，
-并由 CI 在写回前交叉校验官方与镜像的 tarball 是同一份文件。
-
-## 用法
-
-### 作为 flake input
+Add the flake as an input:
 
 ```nix
 {
-  inputs.opencode-nix.url = "git+https://github.com/yxlimo/opencode-nix?ref=main";
-  # 让它的 nixpkgs 与你的一致，避免闭包里出现两份 nixpkgs
+  inputs.opencode-nix.url = "github:yxlimo/opencode-nix";
+
+  # Optional, but avoids pulling a second copy of nixpkgs.
   inputs.opencode-nix.inputs.nixpkgs.follows = "nixpkgs";
 }
 ```
 
-**锁版本**：每次 `sources.json` 变化都会打一个 `v<version>` 的 tag 并发 release，
-所以可以按可读版本号锁，而不是只能锁 commit rev：
+Install it — NixOS, Home Manager and a devShell all use the same attribute path:
 
 ```nix
-# 跟上游最新（推荐，flake.lock 自己会钉住具体 rev）
-inputs.opencode-nix.url = "git+https://github.com/yxlimo/opencode-nix?ref=main";
+environment.systemPackages = [ inputs.opencode-nix.packages.${pkgs.system}.opencode ];
+# or: home.packages = [ inputs.opencode-nix.packages.${pkgs.system}.opencode ];
+```
 
-# 锁死某个 opencode 版本（不会随上游推进）
-# ⚠️ 必须写全 ref：`?ref=v2.2.5` 会被当成**分支名**（refs/heads/v2.2.5）去找，报
-#    "couldn't find remote ref refs/heads/v2.2.5"。tag 要写 refs/tags/。
-inputs.opencode-nix.url = "git+https://github.com/yxlimo/opencode-nix?ref=refs/tags/v2.2.5";
+Try it without installing anything:
 
-# 或者用 github: 简写（它会先试分支、再试 tag，所以直接写版本号即可）
+```bash
+nix run github:yxlimo/opencode-nix
+```
+
+If you would rather have `pkgs.opencode` than a flake attribute, use the
+overlay:
+
+```nix
+nixpkgs.overlays = [ inputs.opencode-nix.overlays.default ];
+
+environment.systemPackages = [ pkgs.opencode ];
+```
+
+### Pinning a version
+
+Every update publishes a `v<version>` tag and a GitHub release, so you can pin a
+readable version instead of a commit revision:
+
+```nix
+# Track upstream (recommended; flake.lock pins the exact revision anyway).
+inputs.opencode-nix.url = "github:yxlimo/opencode-nix";
+
+# Freeze one opencode version.
 inputs.opencode-nix.url = "github:yxlimo/opencode-nix/v2.2.5";
 ```
 
-然后二选一：
+With a `git+https://` URL the ref must be written in full — `?ref=v2.2.5` is
+looked up as a **branch** and fails with
+`couldn't find remote ref refs/heads/v2.2.5`:
 
 ```nix
-# A. 直接用它的包
-opencode = opencode-nix.packages.${system}.opencode;
-
-# B. 用它的 overlay（callPackage 形式，于是 .override 可用）
-opencode = (opencode-nix.overlays.default final prev).opencode;
+inputs.opencode-nix.url = "git+https://github.com/yxlimo/opencode-nix?ref=refs/tags/v2.2.5";
 ```
 
-### 换 registry（例如国内用镜像）
+### Choosing a registry
 
-默认是官方 `https://registry.npmjs.org`。镜像不是默认值 —— 本仓面向全球。
-国内机器可以这样换，**不用改本仓**：
+The registry is a `callPackage` argument, not a constant. The default is the
+official npm registry — this repository is meant to be used worldwide — and a
+mirror is opt-in at the consumer:
 
 ```nix
-opencode = (opencode-nix.packages.${system}.opencode).override {
+opencode = (inputs.opencode-nix.packages.${pkgs.system}.opencode).override {
   registry = "https://registry.npmmirror.com";
 };
 ```
 
-换源后哈希仍然成立：镜像与官方是逐字节相同的 tarball
-（`bin/update-sources.sh` 每次都会比对两边的 `dist.shasum`）。
-万一某个源给了不同内容，哈希失配会直接让构建失败，不会静默装进坏包。
+Switching registries does not change the hashes: a mirror serves the same
+tarball, byte for byte. The update script verifies that on every run by
+comparing `dist.shasum` from both registries before writing anything, and a
+mismatch fails the build instead of silently installing different code.
 
-## 更新机制
+## How updates happen
 
-`sources.json` 由 `bin/update-sources.sh` 维护：
+`sources.json` is the single source of truth for the version and the per-platform
+hashes. It is maintained by `bin/update-sources.sh`:
 
 ```
-1. 向 registry 查 @opencode/cli 的 latest            → 版本号
-2. 该包的 optionalDependencies 给出各平台包的版本    → 平台版本
-3. 交叉校验：官方与镜像的 dist.shasum 必须一致       → 防止镜像滞后/被改
-4. nix-prefetch-url 取每个平台 tarball 的 sha256     → 写回 sources.json
+1. ask the registry for @opencode/cli@latest           -> version
+2. read its optionalDependencies for per-platform versions
+3. cross-check: official and mirror dist.shasum must match
+4. nix-prefetch-url each platform tarball              -> write sources.json
 ```
 
-触发方式是 **事件驱动，没有 cron**：
+Triggering is **event driven; there is no cron**:
 
-- `repository_dispatch`（type=`upstream-release`）：由外部中继在上游发版后触发；
-- `workflow_dispatch`：手动补跑（`gh workflow run update.yml`）。
+- `repository_dispatch` (type `upstream-release`): sent by an external relay
+  after upstream publishes a release;
+- `workflow_dispatch`: manual catch-up (`gh workflow run update.yml`).
 
-更新成功后 CI 会：提交 `sources.json` → 打 `v<version>` tag → 发 GitHub release（附每平台哈希）。
+GitHub only delivers `release` events for releases of the repository itself, so
+a repository that packages someone else's software needs a relay to poll
+upstream and dispatch. The relay is not part of this repository (it runs as a
+systemd timer on the consumer's server); see the consumer's docs.
 
-GitHub 不会把「别人仓库发 release」的事件投递给本仓，所以需要一个探测中继
-（定时查上游 release 列表 → 发现新版本就 dispatch）。中继不在本仓，
-详见使用方仓库的文档。
+On a successful update the workflow commits `sources.json`, tags `v<version>`
+and publishes a GitHub release listing both platform hashes.
 
-## 关于 patchelf
+## Notes
 
-上游的二进制是动态链接 ELF，`PT_INTERP` 指向 `/lib64/ld-linux-x86-64.so.2`。
-在 NixOS 上必须 `autoPatchelfHook` + `libgcc` 才能运行 —— 本仓的 `package.nix`
-已经处理。没有这一步的打包在 FHS 发行版上能跑，在 NixOS 上会直接报
-"cannot execute: required file not found"。
+- The npm tarball contains dynamic ELF binaries whose `PT_INTERP` pointed at
+  `/lib64/ld-linux-x86-64.so.2`. `package.nix` runs `autoPatchelfHook` (plus
+  `libgcc`), which repoints the interpreter at the nix glibc. Without that step
+  the binary builds fine and then fails on NixOS with
+  `cannot execute: required file not found` — it only ever worked on FHS
+  distributions.
+- Only the `v2` line is packaged. Upstream still publishes `v1` (`opencode-ai`
+  1.x); its tags are not picked up.
+- The version of a platform package can differ from the root package, so it is
+  read from `optionalDependencies` rather than assumed equal.
 
-## 致谢
+## Layout
 
-结构参考 [mikael-lindstrom/opencode-nix](https://github.com/mikael-lindstrom/opencode-nix)
-（它把同一件事做成了每日 cron + 单文件 `flake.nix`）。本仓的实现是独立编写的：
-数据放 `sources.json`、CI 校验镜像一致性、补上 `autoPatchelfHook`、
-去掉冗余的 v1 线（`opencode-ai` 1.x）。
+| Path | What it is |
+|---|---|
+| `flake.nix` | flake outputs: `packages`, `overlays.default` |
+| `package.nix` | the derivation; `registry` and `sourcesFile` are arguments |
+| `sources.json` | version and per-platform hashes, maintained by CI |
+| `bin/update-sources.sh` | regenerate `sources.json` from the registry |
+| `.github/workflows/update.yml` | update (dispatch-driven) and build (push/PR) jobs |
+
+## Credits
+
+The structure follows
+[mikael-lindstrom/opencode-flake](https://github.com/mikael-lindstrom/opencode-flake),
+which packages the same binaries on a daily schedule in a single file. This
+repository differs in that the data lives in `sources.json` instead of a regex
+rewrite of `flake.nix`, the CI cross-checks registries, `autoPatchelfHook` is
+present, and the `v1` line is dropped.

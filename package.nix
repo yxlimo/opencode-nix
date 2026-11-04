@@ -1,22 +1,26 @@
-# opencode —— 从 npm 拉上游预编译二进制（与官方安装脚本同一个产物）。
+# opencode, from the npm prebuilt binaries upstream publishes — the same
+# artifact the official install script downloads.
 #
-# 这个包只做三件事：下载平台 tarball、解出 bin/opencode、把它 patch 成能在
-# NixOS 上跑。版本与哈希都在 sources.json（由 bin/update-sources.sh 维护）。
+# The derivation does three things: fetch the platform tarball, install
+# bin/opencode, and patch it so it runs on NixOS. Version and per-platform
+# hashes live in sources.json, maintained by bin/update-sources.sh.
 #
-# 为什么必须 autoPatchelfHook：上游二进制是动态链接的 ELF（PT_INTERP 指
-# /lib64/ld-linux-x86-64.so.2），不 patch 的话在 NixOS 上根本起不来
-# —— 只能在 FHS 发行版上用。这是很多第三方 flake 漏掉的一步。
+# autoPatchelfHook is not optional here: the binaries are dynamically linked
+# ELF with PT_INTERP pointing at /lib64/ld-linux-x86-64.so.2. Without repointing
+# that at the nix glibc they only run on FHS distributions.
 #
-# registry 是参数而不是常量，目的：仓库本身面向全球（默认官方 npm），
-# 国内机器由 consumer 传镜像地址。换源哈希照样成立 —— 镜像与官方是同一份
-# tarball（两边 registry 的 dist.shasum 一致，bin/update-sources.sh 每次都会校验）。
-{ lib
-, stdenv
-, fetchurl
-, autoPatchelfHook
-, libgcc
-, registry ? "https://registry.npmjs.org"
-, sourcesFile ? ./sources.json
+# `registry` is an argument rather than a constant on purpose: the repository
+# targets the official npm registry by default, and consumers in regions where
+# that is slow pass a mirror. Hashes survive the switch because both registries
+# serve the same tarball — bin/update-sources.sh verifies that on every run.
+{
+  lib,
+  stdenv,
+  fetchurl,
+  autoPatchelfHook,
+  libgcc,
+  registry ? "https://registry.npmjs.org",
+  sourcesFile ? ./sources.json,
 }:
 
 let
@@ -25,17 +29,20 @@ let
   platform =
     sources.platforms.${system}
       or (throw "opencode: unsupported system '${system}'; supported: ${lib.concatStringsSep ", " (lib.attrNames sources.platforms)}");
+
+  # Strip a possible trailing slash, otherwise the URL gets a double slash.
+  reg = lib.removeSuffix "/" registry;
 in
 stdenv.mkDerivation {
   pname = "opencode";
   version = sources.version;
 
   src = fetchurl {
-    url = "${registry}/${platform.package}/-/${platform.tarball}-${platform.version}.tgz";
+    url = "${reg}/${platform.package}/-/${platform.tarball}-${platform.version}.tgz";
     hash = platform.hash;
   };
 
-  # npm tarball 的顶层目录固定是 package/
+  # An npm tarball always unpacks into a top-level package/ directory.
   sourceRoot = "package";
 
   nativeBuildInputs = [ autoPatchelfHook ];
@@ -53,7 +60,7 @@ stdenv.mkDerivation {
   '';
 
   meta = {
-    description = "AI coding agent built for the terminal (upstream prebuilt npm binary)";
+    description = "AI coding agent built for the terminal (upstream npm prebuilt binary)";
     homepage = "https://github.com/anomalyco/opencode";
     changelog = "https://github.com/anomalyco/opencode/releases";
     license = lib.licenses.mit;

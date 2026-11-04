@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# 维护 sources.json：查上游最新版本 → 交叉校验镜像 → 算每平台哈希 → 写回。
+# Maintain sources.json: query upstream's latest version, cross-check the
+# mirror, hash every platform tarball, write the file back.
 #
-#   ./bin/update-sources.sh                  # 用默认 registry（官方 npm）查版本
+#   ./bin/update-sources.sh                  # default registry (official npm)
 #   REGISTRY=https://registry.npmmirror.com ./bin/update-sources.sh
-#   ./bin/update-sources.sh --check          # 只报告是否有新版，不写文件（退出码 0/1）
+#   ./bin/update-sources.sh --check          # report only, do not write
 #
-# 为什么默认官方 npm：本仓面向全球使用，镜像只是国内消费者的加速选项。
+# The default is the official registry: this repository is meant to be usable
+# worldwide, and a mirror is a regional acceleration, not a default.
 #
-# 为什么每次都要做交叉校验：镜像滞后或被篡改时，哈希会与官方不一致，
-# 那种情况下宁可直接失败，也不要写进一个「只有我们这边能构建成功」的哈希。
+# The cross-check runs on every update. A stale or tampered mirror would produce
+# a hash that only builds on one side, so the script refuses to write anything
+# unless both registries report the same dist.shasum for each tarball.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -18,7 +21,8 @@ REGISTRY="${REGISTRY:-https://registry.npmjs.org}"
 OFFICIAL="https://registry.npmjs.org"
 ROOT_PKG="@opencode/cli"
 
-# system → 平台包名后缀（npm 上的包是 cli-linux-x64 / cli-linux-arm64）
+# system -> platform package suffix. npm ships these as
+# @opencode/cli-linux-x64 / @opencode/cli-linux-arm64.
 PLATFORMS=(
   "x86_64-linux:linux-x64"
   "aarch64-linux:linux-arm64"
@@ -34,28 +38,26 @@ die() {
   exit 1
 }
 
-# npm 的 scoped 包名在 URL 里要转义斜杠
+# npm scoped package names need the slash escaped in a URL path
 url_pkg() {
   local pkg=$1
   printf '%s' "${pkg/\//%2f}"
 }
 
 for tool in curl jq nix-prefetch-url; do
-  command -v "$tool" >/dev/null || die "缺少依赖：$tool"
+  command -v "$tool" >/dev/null || die "missing dependency: $tool"
 done
 
 printf 'Fetching %s metadata from %s ...\n' "$ROOT_PKG" "$REGISTRY"
-metadata=$(curl -fsS --retry 3 "$REGISTRY/$(url_pkg "$ROOT_PKG")/latest") || die "取不到 $ROOT_PKG 的 metadata"
-version=$(jq -er '.version' <<<"$metadata") || die "metadata 里没有 version"
+metadata=$(curl -fsS --retry 3 "$REGISTRY/$(url_pkg "$ROOT_PKG")/latest") || die "cannot fetch metadata for $ROOT_PKG"
+version=$(jq -er '.version' <<<"$metadata") || die "metadata has no version"
 current=$(jq -r '.version' "$SOURCES")
 
 printf 'upstream: %s   current: %s\n' "$version" "$current"
 
-if [[ "$version" == "$current" ]]; then
-  if $check_only; then
-    printf 'up to date\n'
-    exit 0
-  fi
+if [[ "$version" == "$current" ]] && $check_only; then
+  printf 'up to date\n'
+  exit 0
 fi
 
 platform_entries=()
@@ -65,18 +67,18 @@ for entry in "${PLATFORMS[@]}"; do
   pkg="@opencode/cli-${arch}"
   tarball="cli-${arch}"
 
-  # 平台包版本取自 root 包的 optionalDependencies（各平台可以不同版本）
+  # The platform package version comes from the root package's
+  # optionalDependencies; platforms may lag behind or run ahead.
   platform_version=$(jq -er --arg p "$pkg" '.optionalDependencies[$p]' <<<"$metadata") \
-    || die "$ROOT_PKG 的 optionalDependencies 里没有 $pkg"
+    || die "$ROOT_PKG has no optionalDependencies entry for $pkg"
 
-  # 交叉校验：官方与镜像必须给出同一个 dist.shasum
   official_sum=$(curl -fsS --retry 3 "$OFFICIAL/$(url_pkg "$pkg")/${platform_version}" | jq -r '.dist.shasum')
   mirror_sum=$(curl -fsS --retry 3 "https://registry.npmmirror.com/$(url_pkg "$pkg")/${platform_version}" | jq -r '.dist.shasum')
   if [[ -z "$official_sum" || "$official_sum" == "null" ]]; then
-    die "$pkg@$platform_version 在官方 registry 上没有 dist.shasum"
+    die "$pkg@$platform_version has no dist.shasum on the official registry"
   fi
   if [[ "$official_sum" != "$mirror_sum" ]]; then
-    die "$pkg@$platform_version 的 tarball 在两个 registry 不一致（official=${official_sum} mirror=${mirror_sum}）—— 镜像滞后或被改过，拒绝写入"
+    die "$pkg@$platform_version differs between registries (official=${official_sum} mirror=${mirror_sum}) — refusing to write"
   fi
 
   if $check_only; then
@@ -87,7 +89,7 @@ for entry in "${PLATFORMS[@]}"; do
 
   printf 'hashing %s@%s ... ' "$pkg" "$platform_version"
   base32=$(nix-prefetch-url --type sha256 "$REGISTRY/${pkg}/-/${tarball}-${platform_version}.tgz" 2>/dev/null) \
-    || die "下载/计算哈希失败：$pkg@$platform_version"
+    || die "download or hash failed: $pkg@$platform_version"
   sri=$(nix hash convert --hash-algo sha256 --to sri "$base32")
   printf '%s\n' "$sri"
 
@@ -100,10 +102,10 @@ for entry in "${PLATFORMS[@]}"; do
 done
 
 if $check_only; then
+  # Reached only when the version moved: report and signal "not up to date".
   exit 1
 fi
 
-# 按系统名把上面的条目拼成对象
 new_json=$(jq -n --arg version "$version" '{
   version: $version,
   platforms: {}

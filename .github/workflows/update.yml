@@ -1,10 +1,11 @@
 name: update & build
 
-# 触发方式（**没有 cron**）：
-#   · repository_dispatch: upstream-release  —— 上游发了新 release 时由外部中继触发
-#     （GitHub 不会把别人仓的 release 事件发给我们，中继负责探测后 dispatch）
-#   · workflow_dispatch                      —— 手动补跑
-#   · push / pull_request                    —— 改代码时验证能构建
+# Triggers (there is no cron):
+#   * repository_dispatch: upstream-release — sent by an external relay after
+#     upstream publishes a release. GitHub does not deliver another
+#     repository's release events to this one, so the relay polls and dispatches.
+#   * workflow_dispatch — manual catch-up.
+#   * push / pull_request — verify that the current content builds.
 on:
   push:
     branches: [ main ]
@@ -18,8 +19,8 @@ permissions:
 
 jobs:
   update:
-    # 只有 dispatch/手动触发才做「更新 sources.json 并提交」；
-    # push / PR 只验证当前内容能构建。
+    # Only dispatch/manual runs refresh sources.json and commit it;
+    # push/PR runs just verify that what is committed builds.
     if: github.event_name == 'repository_dispatch' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
@@ -30,24 +31,23 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
-      - name: 更新 sources.json（默认官方 npm）
+      - name: Refresh sources.json (official npm registry)
         run: ./bin/update-sources.sh
 
-      - name: 是否有变化
+      - name: Did anything change?
         id: diff
         run: |
           if git diff --quiet -- sources.json; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            jq -r '.version' sources.json | sed 's/^/version=/'
           fi
 
-      - name: 构建验证（x86_64）
+      - name: Build (x86_64)
         if: steps.diff.outputs.changed == 'true'
         run: nix build --no-link -L .#opencode
 
-      - name: 提交
+      - name: Commit
         if: steps.diff.outputs.changed == 'true'
         run: |
           git config user.name  "github-actions[bot]"
@@ -56,10 +56,10 @@ jobs:
           git commit -m "chore: bump opencode to $(jq -r '.version' sources.json)"
           git push
 
-      # 打 tag + 发 release：consumer 才能锁到「2.2.5」这种可读版本，
-      # 而不是只能锁 commit rev。flake 用法：
-      #   git+https://github.com/yxlimo/opencode-nix?ref=v2.2.5
-      - name: 打 tag + 发 release
+      # Tag and release so consumers can pin a readable version instead of a
+      # commit revision:
+      #   git+https://github.com/yxlimo/opencode-nix?ref=refs/tags/v2.2.5
+      - name: Tag and release
         if: steps.diff.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -67,10 +67,10 @@ jobs:
           version=$(jq -r '.version' sources.json)
           tag="v${version}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "release $tag 已存在，跳过"
+            echo "release $tag already exists, skipping"
             exit 0
           fi
-          notes=$(printf 'opencode %s，来自 npm 的预编译二进制（x86_64-linux / aarch64-linux）。\n\n哈希（sources.json）：\n\n```\n%s\n```\n' \
+          notes=$(printf 'opencode %s, from the npm prebuilt binaries (x86_64-linux / aarch64-linux).\n\nHashes (sources.json):\n\n```\n%s\n```\n' \
             "$version" \
             "$(jq -r '.platforms | to_entries[] | "\(.key): \(.value.version) \(.value.hash)"' sources.json)")
           gh release create "$tag" \
@@ -84,11 +84,12 @@ jobs:
     strategy:
       matrix:
         include:
-          # x86_64：真构建（runner 本身就是 x86_64）
+          # x86_64: a real build (the runner is x86_64).
           - system: x86_64-linux
             build: true
-          # aarch64：只求值。runner 跑不了 arm 二进制（需 binfmt 模拟），
-          # 强行 build 只会得到「exec format error」这种假阴性。
+          # aarch64: evaluation only. The runner cannot execute arm binaries
+          # without binfmt emulation, so building here would only produce a
+          # misleading "exec format error".
           - system: aarch64-linux
             build: false
     steps:
@@ -99,9 +100,9 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
-      - name: 求值
+      - name: Evaluate
         run: nix eval --raw .#packages.${{ matrix.system }}.opencode.version
 
-      - name: 构建
+      - name: Build
         if: matrix.build
         run: nix build --no-link -L .#packages.${{ matrix.system }}.opencode
