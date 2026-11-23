@@ -1,17 +1,17 @@
 {
-  "version": "2.4.0",
+  "version": "2.4.1",
   "platforms": {
     "x86_64-linux": {
       "package": "@opencode/cli-linux-x64",
       "tarball": "cli-linux-x64",
-      "version": "2.4.0",
-      "hash": "sha256-Fj95De/tWRHlL+jWabamtzf7zx2OAHEgc6qrsKRw5Ho="
+      "version": "2.4.1",
+      "hash": "sha256-nb72jyMaMRtWRBxzx77AH22H6+RFI60Up7pHFv9cIDE="
     },
     "aarch64-linux": {
       "package": "@opencode/cli-linux-arm64",
       "tarball": "cli-linux-arm64",
-      "version": "2.4.0",
-      "hash": "sha256-C25uKiWTm7oua919B+hskSfBr8UvXwwISHD1eG7D9HQ="
+      "version": "2.4.1",
+      "hash": "sha256-nrRWf/D6uQttrBBveGZSoOwV1l4l/7y7EG5e0c7k9OI="
     }
   }
 }
